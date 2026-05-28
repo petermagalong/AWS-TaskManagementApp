@@ -17,6 +17,16 @@ const marshallOptions = {
 const awsConfig = AwsService.AwsService.getAwsAccessKeys();
 
 let dynamoDb = new DynamoDBClient(awsConfig);
+
+function stripAwsMetadata(result) {
+    if (!result || typeof result !== 'object') {
+        return result;
+    }
+
+    const { $metadata, ...cleanResult } = result;
+    return cleanResult;
+}
+
 const awsDynamoDbService = {
     async putItem(params) {
         try {
@@ -28,7 +38,7 @@ const awsDynamoDbService = {
             };
             const command = new PutItemCommand(input);
             const result = await dynamoDb.send(command);
-            return result;
+            return stripAwsMetadata(result);
         } catch (error) {
             console.error("Error putting item:", error);
             throw error;
@@ -44,7 +54,7 @@ const awsDynamoDbService = {
             };
             const command = new GetItemCommand(input);
             const result = await dynamoDb.send(command);
-            return unmarshall({ ...result.Item });
+            return result.Item ? unmarshall(result.Item) : null;
         } catch (error) {
             console.error("Error getting item:", error);
             throw error;
@@ -60,7 +70,10 @@ const awsDynamoDbService = {
             };
             const command = new DeleteItemCommand(input);
             const result = await dynamoDb.send(command);
-            return result;
+            return {
+                ...stripAwsMetadata(result),
+                deletedId: id,
+            };
         } catch (error) {
             console.error("Error deleting item:", error);
             throw error;
@@ -74,10 +87,10 @@ const awsDynamoDbService = {
         const attrNames = Object.keys(values);
 
         attrNames.forEach((attrName) => {
-            const replaced = attrName.replace(/\./g, "_");
+            const replaced = attrName.replaceAll('.', '_');
             const attrNameKey = `#${replaced}`;
             const attrNameVal = `:${replaced}`;
-            if (typeof values[attrName] !== "undefined") {
+            if (values[attrName] !== undefined) {
                 expressionAttributeNames[attrNameKey] = attrName;
 
                 const expressionItemObj = marshall({
@@ -124,8 +137,10 @@ const awsDynamoDbService = {
 
             const command = new UpdateItemCommand(input);
             const result = await dynamoDb.send(command);
-            result.updatedId = id;
-            return result;
+            return {
+                ...stripAwsMetadata(result),
+                updatedId: id,
+            };
         } catch (error) {
             console.error("Error updating item:", error);
             throw error;
@@ -137,7 +152,13 @@ const awsDynamoDbService = {
             const { table, where } = params;
             const filterExpression = where ? Object.keys(where).map((key) => `#${key} = :${key}`).join(' and ') : undefined;
             const expressionAttributeNames = where ? Object.keys(where).reduce((acc, key) => ({ ...acc, [`#${key}`]: key }), {}) : undefined;
-            const expressionAttributeValues = where ? Object.keys(where).reduce((acc, key) => ({ ...acc, [`:${key}`]: { S: where[key] } }), {}) : undefined;
+            const expressionAttributeValues = where ? Object.keys(where).reduce((acc, key) => {
+                const marshalled = marshall({ value: where[key] }, marshallOptions);
+                return {
+                    ...acc,
+                    [`:${key}`]: marshalled.value,
+                };
+            }, {}) : undefined;
 
             const result = await dynamoDb.send(new ScanCommand({
                 TableName: table,
@@ -145,7 +166,7 @@ const awsDynamoDbService = {
                 ExpressionAttributeNames: expressionAttributeNames,
                 ExpressionAttributeValues: expressionAttributeValues,
             }));
-            return unmarshall(...result.Items);
+            return (result.Items || []).map((item) => unmarshall(item));
         } catch (error) {
             console.error("Error scanning table:", error);
             throw error;
