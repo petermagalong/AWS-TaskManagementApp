@@ -1,7 +1,7 @@
 const DynamoDB = require('../common/lib/dynamodb');
 
 class TaskModel extends DynamoDB {
-    static table = 'VenusaurDevDDB_ProductBanner';
+    static table = process.env.TASKS_TABLE || 'Tasks';
 
     static async createTask(fields) {
         return this.insertOne(fields);
